@@ -6,134 +6,103 @@ https://medium.com/@soutrikbandyopadhyay/controlling-a-simulink-model-by-a-pytho
 
 @author: Marcelo Feliciano Filho
 """
-
 import matlab.engine #Chama a engine do matlab ao python
-import matplotlib.pyplot as plt #Importa o módulo pyplot da matplotlib
 
-def monitora(system):
+
+def test_matlab():
     """
-    É uma função que abre o matlab simulink e emula processos
-    
-    Parameters
-    ----------
-    system : str
-        Onde system é o sistema que se deseja monitorar.
-        Esse nome é informado pelo usuário na interface
+    O único intuito dessa unção é testar o matlab com os dados padrão pré estabelecidos, simulando input do usuário
+
     Returns
     -------
     None.
 
     """
-    plant = SimulinkPlant(modelName=system)
-    #Establishes a Connection
-    plant.connectToMatlab()
+    system = r"C:\Users\marce\Desktop\PUCPR\TRABALHO DE CONCLUSÃO DO CURSO - TCC\SOFT SENSORS\ofc_benchmark_acquire.slx"
+    bench = "ofc_benchmark_acquire"
+    benchmark_path = r"C:\Users\marce\Desktop\PUCPR\TRABALHO DE CONCLUSÃO DO CURSO - TCC\SOFT SENSORS"
     
-    #Instantiates the controller
-    controller = PIController()
-    plant.connectController(controller)
+    eng = matlab.engine.start_matlab() 
+    eng.addpath(benchmark_path,nargout=0)
     
-    #Control Loop
-    plant.simulate()
+    parametro = ["sensor","solid",0.8,0.05,'2*pi',"setSevereTurbulence()",2,20]
     
-    #Closes Connection to MATLAB
-    plant.disconnect()
+    #Iniciando o benchmark e carrega as principais variáveis ao console da API
+    eng.eval("ofc_benchmark_init",nargout=0)
+    eng.eval(f"simulation.setSimulinkModel('{bench}');",nargout=0)
+    #Carrega as variáveis: aircraft, ofc, servoModel, servoReal e simulation!
     
-class SimulinkPlant:
-    def __init__(self,modelName = 'plant'):
-        
-        #The name of the Simulink Model (To be placed in the same directory as the Python Code) 
-        self.modelName = modelName
-        #Logging the variables
-        self.yHist = 0 
-        self.tHist = 0 
-        
-    def setControlAction(self,u):
-        #Helper Function to set value of control action
-        self.eng.set_param('{}/u'.format(self.modelName),'value',str(u),nargout=0)
+    eng.eval("servoReal.randomiseServoParameters()",nargout=0) #Faz o objeto servo real ficar aleatório
+    eng.eval(f"ofc.setLocation('{parametro[0]}')",nargout=0)
+    eng.eval(f"ofc.setType('{parametro[1]}')",nargout=0)
+    eng.eval(f"ofc.setAmplitude({parametro[2]})",nargout=0)
+    eng.eval(f"ofc.setBias({parametro[3]})",nargout=0)
+    eng.eval(f"ofc.setFrequency({parametro[4]})",nargout=0)
+    eng.eval("ofc.setPhase(0)",nargout=0)
+    eng.eval("ofc.setStartTime(0)",nargout=0)
+    eng.eval(f"aircraft.{parametro[5]}",nargout=0)
     
-    def getHistory(self):
-        #Helper Function to get Plant Output and Time History
-        return self.eng.workspace['output'],self.eng.workspace['tout']
-        
-    def connectToMatlab(self):
-        
-        print("Starting matlab")
-        self.eng = matlab.engine.start_matlab()
-        
-        print("Connected to Matlab")
-        
-        #Load the model
-        self.eng.eval("model = '{}'".format(self.modelName),nargout=0)
-        self.eng.eval("load_system(model)",nargout=0)
-        
-        #Initialize Control Action to 0
-        self.setControlAction(0)
-        print("Initialized Model")
-        
-        #Start Simulation and then Instantly pause
-        self.eng.set_param(self.modelName,'SimulationCommand','start','SimulationCommand','pause',nargout=0)
-        self.yHist,self.tHist = self.getHistory()    
-    
-    def simulate(self):
-        # Control Loop
-        while(self.eng.get_param(self.modelName,'SimulationStatus') != ('stopped' or 'terminating')):
-            
-            self.eng.set_param(self.modelName,'SimulationCommand','continue','SimulationCommand','pause',nargout=0)
-            
-            self.yHist,self.tHist = self.getHistory()
-        
-    def disconnect(self):
-        self.eng.set_param(self.modelName,'SimulationCommand','stop',nargout=0)
-        self.eng.quit()
+    #Cria sinal aleatório de controle
+    eng.eval("""controls = {@(x)aircraft.setControlInput('FPA_control'), ...
+                    @(x)aircraft.setControlInput('NZ_step', x(1), x(2), x(3)), ...
+                    @(x)aircraft.setControlInput('NZ_sine', x(1), x(2), x(3), x(4)), ...
+                    @(x)aircraft.setControlInput('NZ_chirp', x(1))};""",nargout=0)
+    print("Declarou stringão")
+    eng.eval("controls{"+str(parametro[6])+"}([10^randi([-1 1]),randi([10 25]),randi([35, 50]),randi([0, 10])])",
+                    nargout=0)
+    print("Passou o ruim")
+    eng.eval(f"simulation.setStopTime({parametro[7]})",nargout=0) #Seta o tempo final de simulação
 
-class PIController:
-    def __init__(self):
-        
-        #Maintain a History of Variables
-        self.yHist = []
-        self.tHist = []
-        self.uHist = []
-        self.eSum = 0
-        
-    def initialize(self):
-        
-        #Initialize the graph
-        self.fig, = plt.plot(self.tHist,self.yHist)
-        plt.xlim(0,10)
-        plt.ylim(0,20)
-        plt.ylabel("Plant Output")
-        plt.xlabel("Time(s)")
-        plt.title("Plant Response")
-        
-    def updateGraph(self):
-        # Update the Graph
-        self.fig.set_xdata(self.tHist)
-        self.fig.set_ydata(self.yHist)
-        plt.pause(0.1)
-        plt.show()
+    eng.eval(f"model = '{system}'",nargout=0)
     
-    def getControlEffort(self,yHist,tHist):
-        
-        # Returns control action based on past outputs
-        
-        self.yHist = yHist
-        self.tHist = tHist
-        
-        self.updateGraph()
-        
-        if(type(self.yHist) == float):
-            y = self.yHist
-        else:
-            y = self.yHist[-1][0]
-        
-        # Set Point is 10
-        e = 10-y
-        
-        self.eSum += e
-        u = 1*e + 0.001*self.eSum
-        
-        print(y)
-        self.uHist.append(u)
-        return u
-        
-        
+    eng.eval("SimOut = sim(simulation.simulink_model, 'SrcWorkspace', 'current');",nargout=0)
+
+    process = eng.eval("[SimOut.dx_comm SimOut.dx_meas SimOut.time]") #Recebe apenas os valores desejados    
+
+    return(process)
+
+def SimulinkPlant(matlab_obj,parametro):
+    """
+    Essa função objetiva declarar as variáveis necessárias para desenvolvimento da simulação 
+    
+    parametroeters
+    ----------
+    matlab_obj : obj
+        Um objeto da API do matlab que permite execução de comandos.
+    
+    parametro: array
+        Array com todos os parâmetros fornecidos pelo usuário    
+    
+    Returns
+    -------
+    None. Mas realiza inúmeros comandos para simular a planta e declarar as variáveis
+
+    """
+    
+    #Iniciando o benchmark e carrega as principais variáveis ao console da API
+    matlab_obj.eval("ofc_benchmark_init",nargout=0)
+    matlab_obj.eval("simulation.setSimulinkModel('ofc_benchmark_acquire');",nargout=0)
+    #Carrega as variáveis: aircraft, ofc, servoModel, servoReal e simulation!
+    
+    matlab_obj.eval("servoReal.randomiseServoParameters()",nargout=0) #Faz o objeto servo real ficar aleatório
+    matlab_obj.eval(f"ofc.setLocation('{parametro[0]}')",nargout=0)
+    matlab_obj.eval(f"ofc.setType('{parametro[1]}')",nargout=0)
+    matlab_obj.eval(f"ofc.setAmplitude({parametro[2]})",nargout=0)
+    matlab_obj.eval(f"ofc.setBias({parametro[3]})",nargout=0)
+    matlab_obj.eval(f"ofc.setFrequency('{parametro[4]}')",nargout=0)
+    matlab_obj.eval("ofc.setPhase(0)",nargout=0)
+    matlab_obj.eval("ofc.setStartTime(0)",nargout=0)
+    matlab_obj.eval(f"aircraft.{parametro[5]}",nargout=0)
+    
+    #Cria sinal aleatório de controle
+    matlab_obj.eval("""controls = {@(x)aircraft.setControlInput('FPA_control'), ...
+                    @(x)aircraft.setControlInput('NZ_step', x(1), x(2), x(3)), ...
+                    @(x)aircraft.setControlInput('NZ_sine', x(1), x(2), x(3), x(4)), ...
+                    @(x)aircraft.setControlInput('NZ_chirp', x(1))};""",nargout=0)
+    print("Declarou stringão")
+    matlab_obj.eval("controls{"+str(parametro[6])+"}([10^randi([-1 1]),randi([10 25]),randi([35, 50]),randi([0, 10])])",
+                    nargout=0)
+    print("Passou o ruim")
+    matlab_obj.eval(f"simulation.setStopTime({parametro[7]})",nargout=0) #Seta o tempo final de simulação
+    
+    
